@@ -1,0 +1,117 @@
+#include "task_acquire.h"
+#include"Drv.h"
+#include"lldrv.h"
+#include"MonitorFunction.h"
+#include<QDebug>
+#include"sem_com.h"
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include<sys/sem.h>
+#include <sys/msg.h>
+#include <errno.h>
+#include<error.h>
+
+extern SAMPLEDATA 	globalSampleData;					 /*采集数据数组******/
+extern float 			globalADValue[NUM_ADC_CHANNEL];           /*存取两个M35的值***/
+extern UINT8 			globalDIValue[NUM_DIC_CHANNEL];		 /*存取M31的值*******/
+extern UINT8 			globalSWValue[NUM_SWC_CHANNEL];          /*存取M43的值*******/
+
+extern float			OIL1_LMT;							/*滑油压力低I值报警值**************/
+extern float			OIL2_LMT;							/*滑油压力低II值报警值*************/
+extern float			SPD1_LMT;						/*超速I值报警值********************/
+extern float			SPD2_LMT;						/*超速II值报警值*******************/
+static  int                          sampleLoop=0;
+extern int                          semSyncAcq;
+extern int                          msqid;
+
+task_Acquire::task_Acquire(QObject *parent) :
+    QObject(parent)
+{
+    qDebug()<<"taskAcquire start";
+}
+
+void task_Acquire::taskAcquire_slot()
+{
+    int 			i=0,j=0,ret_value;	/*循环变量*/
+    unsigned short 	rawData[32],value;
+    static unsigned short myData[NUM_ADC_CHANNEL][NUM_SAMPLE_LOOP];
+    UINT8 			switchValue;
+    int 			dataSum = 0;
+    const float 		sampleFullRange[]={100,100,100,100,100,100,100,100,100,100,100,400,35,1.6,0.6,
+                                            0.4,1.6,100,15000,100};/*	kPa,kPa,*/
+    float NUM_FOURTY=40.0;
+    float NUM_FOUR=4.0;
+    float NUM_SIXTY=16.0;
+    float NUM_THOUSAND=16384.0;
+    float test1=0.0;
+
+    struct msgstru msgS;
+    msgS.msgtype = 1;
+    /*
+    *读取M43,M31,M35的值，并将读取值存入globalADValue，
+    *globalDIValue，globalSWValue和消息队列缓冲globalSampleData中
+    */
+    while(1)
+    {
+        qDebug()<<"wait for semsynAcq";
+        sem_p(semSyncAcq);
+        qDebug()<<"wait for semsynAcq success!";
+        m35Data((unsigned short*)rawData);
+        for(j=0;j<NUM_ADC_CHANNEL;j++)
+        {
+                myData[j][sampleLoop] = rawData[j];
+        }
+        if(sampleLoop == NUM_SAMPLE_LOOP)
+        {
+            for(i=0;i<NUM_ADC_CHANNEL;i++)
+                {
+                        qsort(myData[i],NUM_SAMPLE_LOOP,sizeof(unsigned short),compare);/*C语言排序函数 按照从小到大*/
+                        dataSum = 0;
+                        for(j=2;j<(NUM_SAMPLE_LOOP-2);j++)			/*	去掉最小和最大两个值	*/
+                        {
+                                dataSum += myData[i][j];
+                        }
+                        globalADValue[i] = (float)dataSum/(NUM_SAMPLE_LOOP-4)/NUM_THOUSAND;
+                        test1 =NUM_FOURTY* globalADValue[i]-20;
+                        /* CH0 压气机机匣温度*/
+                        globalADValue[i] = ((test1- NUM_FOUR)/NUM_SIXTY)*sampleFullRange[i];		/* 4.0mA - 0	20.0mA - 满量程*/
+                }
+//                            qDebug()<<1;
+                value = mread(M31_BASE_ADDR)&0xffff;
+
+                for(i=0;i<16;i++)
+                {
+                        globalDIValue[i] = (value>>i)&1;		/*光耦开关量输入，用户拨动按键输入*/
+//                                    qDebug()<<"DI = "<<globalDIValue[i];
+                }
+                switchValue = mread(M43_BASE_ADDR)&0xff;
+                for(i=0;i<8;i++)
+                {
+                          globalSWValue[i] = (switchValue>>i)&0x01;   /*继电器模块状态监测值*/
+//                                       qDebug()<<"SW = "<<globalSWValue[i];
+                }
+
+                memcpy(&globalSampleData.adVal[0],&globalADValue[0],sizeof(globalADValue));
+                memcpy(&globalSampleData.diVal[0],&globalDIValue[0],sizeof(globalDIValue));
+                memcpy(&globalSampleData.swVal[0],&globalSWValue[0],sizeof(globalSWValue));
+
+                memcpy(&msgS.msgtext[0],&globalSampleData,sizeof(SAMPLEDATA));
+//                msgS.msgtext = (char *)globalSampleData;
+                ret_value = msgsnd(msqid,&msgS,sizeof(SAMPLEDATA),0);
+                if(ret_value < 0)
+                {
+                    qDebug()<<"msgsend failed and exit";
+                    exit(0);
+                }
+                sampleLoop = 0;
+        }
+        else
+        {
+                sampleLoop++;
+        }
+    }
+}
