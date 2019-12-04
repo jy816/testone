@@ -43,7 +43,7 @@ ui(new Ui::inputDialog)
          else//newdata.dat文件不存在，意味着目前没有用户自定义参数，就使用默认参数
          {
 		 UserDefVal.IN_OIL1_LMT =0.072;
-		 UserDefVal.IN_OIL2_LMT = 0.05;
+		 UserDefVal.IN_OIL2_LMT = 0.06;
 		 UserDefVal.IN_SPD1_LMT = 11000;
 		 UserDefVal.IN_SPD2_LMT = 13000;
 		 UserDefVal.IN_PROFIBUS_SLAVE = 5;
